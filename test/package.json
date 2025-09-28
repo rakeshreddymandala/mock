@@ -1,0 +1,16 @@
+{
+  "name": "humaneq-hr-tests",
+  "version": "1.0.0",
+  "description": "Test suite for HumaneQ-HR admin portal and database",
+  "type": "module",
+  "scripts": {
+    "test:admin": "node admin-portal-test.js",
+    "test:database": "node database-structure-test.js",
+    "test:agents": "node elevenlabs-agent-test.js",
+    "test:all": "npm run test:admin && npm run test:database && npm run test:agents"
+  },
+  "dependencies": {
+    "mongodb": "^6.0.0",
+    "dotenv": "^16.0.0"
+  }
+}
