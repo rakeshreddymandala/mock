@@ -101,7 +101,7 @@ export default function InterviewPage() {
       {interview.currentStep === "interview" && (
         <InterviewStep
           mediaStream={mediaStream}
-          elevenLabsAudioUrl={interview.elevenLabsAudioUrl}
+          audioData={interview.audioData}              // APPROACH 3: Real-time frequency data
           isAgentSpeaking={interview.isAgentSpeaking}
           interviewStarted={interview.interviewStarted}
           isCameraOn={isCameraOn}

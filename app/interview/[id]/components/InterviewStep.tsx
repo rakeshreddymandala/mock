@@ -9,7 +9,7 @@ import { useEffect, useState, useCallback } from "react"
 
 interface InterviewStepProps {
   mediaStream: MediaStream | null
-  elevenLabsAudioUrl: string | null
+  audioData: Uint8Array | null        // APPROACH 3: Real-time frequency data
   isAgentSpeaking: boolean
   interviewStarted: boolean
   isCameraOn: boolean
@@ -25,7 +25,7 @@ interface InterviewStepProps {
 
 export default function InterviewStep({
   mediaStream,
-  elevenLabsAudioUrl,
+  audioData,                // APPROACH 3: Real-time frequency data
   isAgentSpeaking,
   interviewStarted,
   isCameraOn,
@@ -106,11 +106,9 @@ export default function InterviewStep({
       {/* Full screen VoiceReactiveVisual animation */}
       <div className="w-full h-full flex items-center justify-center bg-black relative">
         <VoiceReactiveVisual
-          elevenLabsAudio={elevenLabsAudioUrl}
+          audioData={audioData}              // APPROACH 3: Pass real-time frequency data
           isAgentSpeaking={isAgentSpeaking}
           onAgentAudioEnd={onAgentAudioEnd}
-          onSystemAudioElementReady={handleSystemAudioElementReady}
-          mediaStream={mediaStream}
           className="w-full h-full"
         />
       </div>

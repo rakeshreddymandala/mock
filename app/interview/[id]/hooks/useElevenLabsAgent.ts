@@ -3,10 +3,69 @@ import { Conversation } from "@elevenlabs/client";
 
 export function useElevenLabsAgent(audioAnalysis?: { setupAudioAnalysis: (audio: HTMLAudioElement) => AnalyserNode | null, startAnalysis: () => void, stopAnalysis: () => void }) {
   const [conversation, setConversation] = useState<Conversation | null>(null);
-  const [elevenLabsAudioUrl, setElevenLabsAudioUrl] = useState<string | null>(null);
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
+  const [audioData, setAudioData] = useState<Uint8Array | null>(null);
 
-  const agentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // APPROACH 3: Core audio monitoring function
+  const startAudioMonitoring = useCallback((conversationInstance: Conversation) => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+    }
+
+    console.log("🎵 [APPROACH 3] Setting up real-time audio data monitoring...");
+
+    pollingIntervalRef.current = setInterval(() => {
+      try {
+        // Monitor conversation mode and get audio data (as per Approach 3 plan)
+        const currentMode = (conversationInstance as any).mode;
+        const isCurrentlySpeaking = currentMode === 'speaking';
+
+        // Log mode changes
+        if (isCurrentlySpeaking !== isAgentSpeaking) {
+          console.log(`🔄 [APPROACH 3] Mode changed: ${currentMode}`);
+          setIsAgentSpeaking(isCurrentlySpeaking);
+        }
+
+        // Get real-time frequency data when agent is speaking
+        if (isCurrentlySpeaking && typeof (conversationInstance as any).getOutputByteFrequencyData === 'function') {
+          const frequencyData = (conversationInstance as any).getOutputByteFrequencyData();
+          
+          if (frequencyData && frequencyData.length > 0) {
+            const dataArray = Array.from(frequencyData as Uint8Array);
+            const avgAmplitude = dataArray.reduce((sum: number, val: number) => sum + val, 0) / dataArray.length;
+            console.log(`🎧 [APPROACH 3] Got frequency data - Length: ${frequencyData.length}, Avg: ${avgAmplitude.toFixed(1)}, Sample: [${dataArray.slice(0, 5).join(', ')}]`);
+            setAudioData(frequencyData as Uint8Array);
+          } else {
+            console.log(`🎧 [APPROACH 3] No frequency data available (length: ${frequencyData?.length || 0})`);
+          }
+        } else if (!isCurrentlySpeaking) {
+          // Keep audioData for a short time to avoid timing issues
+          // Only clear after agent has been not speaking for a while
+          setTimeout(() => {
+            if (!isAgentSpeaking) {
+              console.log(`🔇 [APPROACH 3] Clearing audio data - agent stopped speaking`);
+              setAudioData(null);
+            }
+          }, 200); // Wait 200ms before clearing
+        }
+      } catch (error) {
+        console.error("❌ [APPROACH 3] Error in audio monitoring:", error);
+      }
+    }, 50); // Poll every 50ms for smooth animation
+
+    console.log("✅ [APPROACH 3] Audio monitoring started");
+  }, [isAgentSpeaking]);
+
+  // Stop audio monitoring
+  const stopAudioMonitoring = useCallback(() => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+      console.log("🔄 [APPROACH 3] Audio monitoring stopped");
+    }
+  }, []);
 
   // Refactored startAgentSession
   const startAgentSession = useCallback(async (interviewId: string) => {
@@ -27,93 +86,66 @@ export function useElevenLabsAgent(audioAnalysis?: { setupAudioAnalysis: (audio:
       const newConversation = await Conversation.startSession({ signedUrl });
       setConversation(newConversation);
       console.log("✅ Agent session started successfully");
+
+      // APPROACH 3: Start real-time audio monitoring
+      console.log("🎵 [APPROACH 3] Starting real-time audio monitoring...");
+      startAudioMonitoring(newConversation);
     } catch (error) {
       console.error("❌ Error starting agent session:", error);
     }
   }, []);
 
-  // Refactored sendAudio logic
-  const sendAudioToAgent = useCallback(async (audioBlob: Blob) => {
-    if (!conversation) {
-      console.error("❌ Conversation not started");
-      return;
-    }
-
-    try {
-      console.log("📤 Sending audio to agent...");
-      const response = await conversation.sendAudio(audioBlob);
-      console.log("📥 Agent response:", response);
-
-      if (response.audioUrl) {
-        handleAgentResponse(response.audioUrl);
-      }
-    } catch (error) {
-      console.error("❌ Error communicating with agent:", error);
-    }
-  }, [conversation]);
-
-  const handleAgentResponse = useCallback(async (responseAudioUrl: string) => {
-    try {
-      console.log("🔊 Received agent response audio:", responseAudioUrl.substring(0, 50) + "...");
-
-      // Set the audio URL for VoiceReactiveVisual component (it will handle playback and animation)
-      setElevenLabsAudioUrl(responseAudioUrl);
-      setIsAgentSpeaking(true);
-
-      console.log("✅ Agent audio URL set for VoiceReactiveVisual");
-    } catch (error) {
-      console.error("Error handling agent response:", error);
-      setIsAgentSpeaking(false);
-    }
-  }, []);
+  // APPROACH 3: Not needed - ElevenLabs handles audio automatically
+  // Audio data comes from real-time monitoring instead
 
   const endAgentSession = useCallback(async (interviewId: string) => {
     if (conversation) {
       try {
         console.log("Ending agent session...");
 
+        // Stop audio monitoring
+        stopAudioMonitoring();
+
         // End the conversation session
         await conversation.endSession();
-        console.log("✅ Agent session ended", conversation);
+        console.log("✅ Agent session ended");
 
-        // Optionally save the conversation ID
-        const conversationId = conversation.connection.conversationId;
-        if (conversationId) {
-          const response = await fetch(`/api/interviews/${interviewId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ conversationId }),
-          });
-          console.log("Conversation ID saved response:", response.status);
-          if (response.ok) {
-            const result = await response.json();
-            console.log("Conversation save result:", result);
+        // Try to save conversation ID if accessible
+        try {
+          const conversationId = (conversation as any).conversationId || (conversation as any).id;
+          if (conversationId) {
+            const response = await fetch(`/api/interviews/${interviewId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ conversationId }),
+            });
+            console.log("Conversation ID saved response:", response.status);
           }
-        } else {
-          console.warn("No conversationId found to save");
+        } catch (saveError) {
+          console.log("Note: Could not save conversation ID (not critical)");
         }
       } catch (error) {
         console.error("Error ending agent session:", error);
       } finally {
         setConversation(null);
+        setIsAgentSpeaking(false);
+        setAudioData(null);
       }
     }
-  }, [conversation]);
+  }, [conversation, stopAudioMonitoring]);
 
   const handleAgentAudioEnd = useCallback(() => {
     console.log("🔊 Agent audio ended, resetting state");
     setIsAgentSpeaking(false);
-    setElevenLabsAudioUrl(null);
+    setAudioData(null);
   }, []);
 
   return {
     conversation,
-    elevenLabsAudioUrl,
-    isAgentSpeaking,
+    audioData,           // APPROACH 3: Real-time frequency data
+    isAgentSpeaking,     // APPROACH 3: Speaking state
     startAgentSession,
-    sendAudioToAgent,
     endAgentSession,
-    handleAgentResponse,
     handleAgentAudioEnd,
   };
 }

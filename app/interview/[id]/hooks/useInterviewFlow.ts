@@ -144,8 +144,7 @@ export function useInterviewFlow(
     // State from all hooks
     ...interviewState,
     ...recording,
-    ...agent,
-    audioData: audioAnalysis.audioData,
+    ...agent,  // APPROACH 3: This includes audioData, isAgentSpeaking from updated useElevenLabsAgent
 
     // Actions
     handleRequestPermissions,

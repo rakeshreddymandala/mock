@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { apiService, ApiError } from '../services/api';
 import * as THREE from 'three';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -6,23 +7,15 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
-import { Analyser } from '@/lib/design/analyser';
-import { fs as backdropFS, vs as backdropVS } from '@/lib/design/backdrop-shader';
-import { vs as sphereVS } from '@/lib/design/sphere-shader';
+import { Analyser } from '../design/analyser';
+import { fs as backdropFS, vs as backdropVS } from '../design/backdrop-shader';
+import { vs as sphereVS } from '../design/sphere-shader';
 
 interface VoiceReactiveVisualProps {
-  audioData?: Uint8Array | null;  // Real-time frequency data from ElevenLabs
-  isAgentSpeaking: boolean;        // Whether agent is currently speaking
-  onAgentAudioEnd?: () => void;    // Callback when agent stops speaking
   className?: string;
 }
 
-export default function VoiceReactiveVisual({ 
-  audioData, 
-  isAgentSpeaking, 
-  onAgentAudioEnd, 
-  className = '' 
-}: VoiceReactiveVisualProps) {
+export default function VoiceReactiveVisual({ className = '' }: VoiceReactiveVisualProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<{
     scene?: THREE.Scene;
@@ -38,42 +31,71 @@ export default function VoiceReactiveVisual({
     prevTime?: number;
   }>({});
 
-  // Create a mock analyser that exactly simulates Web Audio API with fftSize=32
-  const createMockAnalyser = (audioData: Uint8Array) => {
-    // Simulate Web Audio API AnalyserNode behavior:
-    // fftSize = 32 → frequencyBinCount = 16 → dataArray has 16 values
-    // But animation only uses first 3: dataArray[0], dataArray[1], dataArray[2]
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [error, setError] = useState<string>('');
+  const [inputText, setInputText] = useState('');
+
+  const handleSendMessage = async () => {
+    if (!inputText.trim()) return;
     
-    // Convert ElevenLabs 1024-length array to 16-length array like Web Audio API
-    const binSize = Math.floor(audioData.length / 16);
-    const webAudioData = new Uint8Array(16);
-    
-    for (let i = 0; i < 16; i++) {
-      const start = i * binSize;
-      const end = Math.min(start + binSize, audioData.length);
-      const slice = audioData.slice(start, end);
-      // Use average instead of max for more realistic frequency analysis
-      const avg = Array.from(slice).reduce((sum, val) => sum + val, 0) / slice.length;
-      webAudioData[i] = Math.round(avg);
+    try {
+      setError('');
+      setIsPlaying(true);
+      
+      // Send to backend API
+      console.log('Sending message:', inputText);
+      const response = await apiService.sendMessage(inputText);
+      console.log('AI Response:', response.text);
+      
+      // Clear input
+      setInputText('');
+      
+      // Play TTS audio and trigger animations
+      await playAudioAndAnimate(response.audio);
+      
+    } catch (err) {
+      const errorMessage = err instanceof ApiError 
+        ? err.message 
+        : 'Failed to process message. Please try again.';
+      setError(errorMessage);
+      console.error('Message processing error:', err);
+      setIsPlaying(false);
     }
-    
-    return {
-      // Match Analyser interface
-      analyser: null as any,
-      bufferLength: 16, // Same as Web Audio API with fftSize=32
-      dataArray: webAudioData,
+  };
+
+  const playAudioAndAnimate = async (audioBase64: string) => {
+    try {
+      // Create audio element
+      const audioElement = new Audio(`data:audio/mpeg;base64,${audioBase64}`);
       
-      // The update method that gets called in animation loop
-      update: () => {
-        // Log exactly like working project line 250: "Audio data: 255 245 202"  
-        console.log('Audio data:', webAudioData[0], webAudioData[1], webAudioData[2]);
-      },
+      // Create audio context and analyser for animation
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const source = audioContext.createMediaElementSource(audioElement);
+      const analyser = new Analyser(source);
       
-      // The data getter that animation uses (returns 16-length array like Web Audio API)
-      get data() {
-        return webAudioData;
-      }
-    };
+      // Connect to output
+      source.connect(audioContext.destination);
+      
+      // Store references for animation
+      sceneRef.current.audioElement = audioElement;
+      sceneRef.current.analyser = analyser;
+      
+      // Play audio
+      await audioElement.play();
+      
+      // Stop when audio ends
+      audioElement.onended = () => {
+        setIsPlaying(false);
+        sceneRef.current.analyser = undefined;
+        sceneRef.current.audioElement = undefined;
+        audioContext.close();
+      };
+      
+    } catch (err) {
+      console.error('Audio playback error:', err);
+      setError('Failed to play audio response');
+      setIsPlaying(false);
+    }
   };
 
   const initScene = () => {
@@ -198,33 +220,6 @@ export default function VoiceReactiveVisual({
     };
   };
 
-  // Handle agent speaking state changes and set up analyser like Test.tsx
-  useEffect(() => {
-    console.log("🎨 [APPROACH 3] VoiceReactiveVisual props changed:", {
-      hasAudioData: !!audioData,
-      audioDataLength: audioData?.length || 0,
-      isAgentSpeaking,
-      audioDataType: typeof audioData,
-      audioDataNull: audioData === null,
-      audioDataUndefined: audioData === undefined,
-    });
-    
-    // Set up analyser when we have audioData (like Test.tsx sets analyser)
-    if (audioData && audioData.length >= 3) {
-      console.log("🎵 [APPROACH 3] Setting up analyser with audioData");
-      sceneRef.current.analyser = createMockAnalyser(audioData) as unknown as Analyser;
-    } else {
-      // Clear analyser when no audioData (like Test.tsx clears analyser)
-      sceneRef.current.analyser = undefined;
-    }
-    
-    // Call callback when agent stops speaking
-    if (!isAgentSpeaking && onAgentAudioEnd) {
-      console.log("📞 [APPROACH 3] Agent stopped speaking, calling callback");
-      onAgentAudioEnd();
-    }
-  }, [audioData, isAgentSpeaking, onAgentAudioEnd]);
-
   useEffect(() => {
     const cleanup = initScene();
     
@@ -245,24 +240,23 @@ export default function VoiceReactiveVisual({
       const backdropMaterial = backdrop.material as THREE.RawShaderMaterial;
       backdropMaterial.uniforms.rand.value = Math.random() * 10000;
 
-      // APPROACH 3: Animation logic exactly like Test.tsx
-      // Only animate sphere if we have analyser (like Test.tsx line 250+)
-      if (sceneRef.current.analyser) {
-        // Update audio analysis (like Test.tsx)
+      // Only animate sphere if we have audio analyser and audio is playing
+      if (sceneRef.current.analyser && sceneRef.current.audioElement && !sceneRef.current.audioElement.paused) {
+        // Update audio analysis
         sceneRef.current.analyser.update();
         
-        // Debug: log audio data occasionally (like Test.tsx line 250)
+        // Debug: log audio data occasionally
         if (Math.random() < 0.01) { // Log ~1% of frames
           console.log('Audio data:', sceneRef.current.analyser.data[0], sceneRef.current.analyser.data[1], sceneRef.current.analyser.data[2]);
         }
-        
-        // Update sphere based on audio (EXACT same logic as Test.tsx)
+
+        // Update sphere based on audio
         const sphereMaterial = sphere.material as THREE.MeshStandardMaterial;
         if (sphereMaterial.userData?.shader) {
-          // Scale sphere based on audio (Test.tsx line 265)
+          // Scale sphere based on audio
           sphere.scale.setScalar(1 + (0.2 * sceneRef.current.analyser.data[1]) / 255);
 
-          // Rotate camera based on audio (Test.tsx line 267-277)
+          // Rotate camera based on audio
           const f = 0.001;
           if (rotation) {
             rotation.x += (dt * f * 0.5 * sceneRef.current.analyser.data[1]) / 255;
@@ -279,7 +273,7 @@ export default function VoiceReactiveVisual({
             }
           }
 
-          // Update shader uniforms (Test.tsx line 280-295)
+          // Update shader uniforms
           const shader = sphereMaterial.userData.shader;
           shader.uniforms.time.value += (dt * 0.1 * sceneRef.current.analyser.data[0]) / 255;
           shader.uniforms.inputData.value.set(
@@ -296,7 +290,7 @@ export default function VoiceReactiveVisual({
           );
         }
       } else {
-        // Reset sphere to default state when not playing (like Test.tsx line 297-302)
+        // Reset sphere to default state when not playing
         sphere.scale.setScalar(1);
         if (camera) {
           camera.position.set(2, -2, 5);
@@ -345,12 +339,66 @@ export default function VoiceReactiveVisual({
         style={{ imageRendering: 'pixelated' }}
       />
       
-      {/* Status message - show when agent is speaking */}
-      {isAgentSpeaking && (
-        <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-10 bg-blue-500/90 backdrop-blur-sm text-white px-4 py-2 rounded-lg text-sm border border-blue-400/30">
-          🎵 Agent Speaking...
+      {/* Error message - top center */}
+      {error && (
+        <div className="absolute top-6 left-1/2 transform -translate-x-1/2 z-10 bg-red-500/90 backdrop-blur-sm text-white px-4 py-2 rounded-lg text-sm border border-red-400/30">
+          {error}
         </div>
       )}
+
+      {/* Status message - top center */}
+      {isPlaying && (
+        <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-10 bg-blue-500/90 backdrop-blur-sm text-white px-4 py-2 rounded-lg text-sm border border-blue-400/30">
+          🎵 Playing AI Response...
+        </div>
+      )}
+      
+      {/* Input Field - Bottom Center */}
+      <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-10 w-full max-w-md px-4">
+        <div className="flex gap-2 items-center bg-gray-800/50 backdrop-blur-sm border border-gray-600/30 rounded-2xl p-3">
+          <input
+            type="text"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            placeholder="Ask me anything..."
+            className="flex-1 bg-transparent text-white placeholder-gray-400 border-none outline-none text-sm"
+            onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+          />
+          <button
+            onClick={handleSendMessage}
+            disabled={!inputText.trim() || isPlaying}
+            className="w-10 h-10 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:opacity-50 flex items-center justify-center transition-all duration-300"
+          >
+            {isPlaying ? (
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                className="text-white"
+              >
+                <path
+                  d="M22 2L11 13"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M22 2L15 22L11 13L2 9L22 2Z"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
